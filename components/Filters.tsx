@@ -21,14 +21,14 @@ function fmt(d: Date): string {
 }
 
 export function defaultFilters(): FilterState {
-  const end = new Date();
-  const start = new Date(end.getTime() - 29 * 86400000);
+  // 합성(과거) 데이터의 수록 기간을 미리 알 수 없으므로, 첫 화면에서는
+  // 날짜 필터를 걸지 않고 전체 기간을 조회한다. (기간 프리셋으로 이후 좁힘)
   return {
     region: '',
     district: '',
     stationName: '',
-    startDate: fmt(start),
-    endDate: fmt(end),
+    startDate: '',
+    endDate: '',
     maxPages: 20,
   };
 }
@@ -94,6 +94,17 @@ export function Filters({ value, availableRegions, loading, onApply }: Props) {
       <div className="field">
         <span className="field__label">기간</span>
         <div className="chips">
+          <button
+            type="button"
+            className={`chip${!draft.startDate && !draft.endDate ? ' chip--active' : ''}`}
+            onClick={() => {
+              const next = { ...draft, startDate: '', endDate: '' };
+              setDraft(next);
+              onApply(next);
+            }}
+          >
+            전체 기간
+          </button>
           {PRESETS.map((p) => (
             <button
               type="button"
