@@ -96,6 +96,23 @@ npm run dev
 
 ---
 
+## Railway 배포
+
+이 저장소는 **Railway** 자동 배포에 맞춰 설정되어 있습니다(`railway.json`).
+
+1. [railway.app](https://railway.app) 로그인 → **New Project** → **Deploy from GitHub repo**
+2. `jazzbone1/ev-charging-analytics` 선택 (Railway가 Next.js를 자동 감지 → `npm run build` / `npm run start`)
+3. 서비스 → **Variables** 탭에서 환경변수 추가:
+   - `EV_API_SERVICE_KEY` = data.go.kr 인증키 (없으면 목업 데이터로 동작)
+   - (선택) `EV_API_MAX_PAGES`, `USE_MOCK`
+4. 서비스 → **Settings → Networking → Generate Domain** 으로 공개 URL 생성
+5. 생성된 `https://*.up.railway.app` 주소로 접속
+
+> `start` 스크립트가 Railway가 주입하는 `$PORT` 로 바인딩
+> (`next start -H 0.0.0.0 -p $PORT`)하도록 되어 있어 별도 설정 없이 헬스체크를 통과합니다.
+
+---
+
 ## 데이터 출처
 
 [공공데이터포털](https://www.data.go.kr) — 한국환경공단 전기차 충전소 충전건별
