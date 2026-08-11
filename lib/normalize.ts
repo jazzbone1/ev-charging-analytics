@@ -11,6 +11,7 @@ const FIELD_CANDIDATES = {
   stationId: ['chrsId', 'statId', 'stationId', 'csId', '충전소아이디'],
   chargerId: ['chgerId', 'chargerId', 'chrgrId', 'cpId', '충전기아이디'],
   stationTypeLarge: [
+    'chrsTypeLclsNm', // ← 실제 응답 (예: "기타시설")
     'chrsTyLcls',
     'chrsTypeLcls',
     'statTyLcls',
@@ -19,6 +20,7 @@ const FIELD_CANDIDATES = {
     '충전소유형대분류',
   ],
   stationTypeSmall: [
+    'chrsTypeMclsfNm', // ← 실제 응답 (중분류, 예: "군부대")
     'chrsTyScls',
     'chrsTypeScls',
     'statTyScls',
@@ -26,6 +28,7 @@ const FIELD_CANDIDATES = {
     '충전소유형소분류',
   ],
   chargerType: [
+    'chrsTypeNm', // ← 실제 응답 (예: "DC콤보")
     'chgerType',
     'chargerType',
     'chgerTypeNm',
@@ -34,6 +37,7 @@ const FIELD_CANDIDATES = {
     '충전기유형명',
   ],
   capacity: [
+    'chargCoctSeNm', // ← 실제 응답 (예: "급속(200kW동시)")
     'chrgrCapaNm',
     'capaNm',
     'chgerCapa',
@@ -47,6 +51,7 @@ const FIELD_CANDIDATES = {
   startAt: ['chargBgngDt', 'chargeStartDt', 'startDt', 'bgngDt', '충전시작일시'],
   endAt: ['chargEndDt', 'chargeEndDt', 'endDt', '충전종료일시'],
   amount: [
+    'totChargRcngQnt', // ← 실제 응답 (충전량, 예: "30.07")
     'chargAmt',
     'chargeAmt',
     'chrgAmt',
@@ -55,7 +60,8 @@ const FIELD_CANDIDATES = {
     'chargeKwh',
     '충전량',
   ],
-  duration: ['chargTime', 'chargeTime', 'chrgTime', 'durationMin', '충전시간'],
+  // 충전시간: 실제 응답은 totChargHr 이며 "HH:MM:SS" 형식 → 분으로 파싱
+  duration: ['totChargHr', 'chargTime', 'chargeTime', 'chrgTime', 'durationMin', '충전시간'],
 } as const;
 
 type LogicalField = keyof typeof FIELD_CANDIDATES;
@@ -108,13 +114,34 @@ export function parseDateTime(v: unknown): string | null {
   return Number.isNaN(t) ? null : new Date(t).toISOString();
 }
 
-/** 시작/종료 시각과 명시적 duration 필드로부터 충전 시간(분)을 계산 */
+/**
+ * 충전시간 값을 "분"으로 파싱.
+ * - "HH:MM:SS" / "HH:MM" (예: totChargHr "00:00:01") → 분 환산
+ * - 숫자/숫자문자열 → 분으로 간주
+ */
+function parseDurationToMinutes(v: unknown): number {
+  if (v == null || v === '') return 0;
+  const s = String(v).trim();
+  if (s.includes(':')) {
+    const parts = s.split(':').map((p) => Number.parseInt(p, 10) || 0);
+    let h = 0;
+    let m = 0;
+    let sec = 0;
+    if (parts.length >= 3) [h, m, sec] = parts;
+    else if (parts.length === 2) [h, m] = parts;
+    else [m] = parts;
+    return Math.round(h * 60 + m + sec / 60);
+  }
+  return Math.max(0, toNumber(s));
+}
+
+/** 명시적 duration 필드(우선) 또는 시작/종료 시각 차이로 충전 시간(분)을 계산 */
 function resolveDuration(
   durationRaw: unknown,
   startAt: string | null,
   endAt: string | null,
 ): number {
-  const explicit = toNumber(durationRaw);
+  const explicit = parseDurationToMinutes(durationRaw);
   if (explicit > 0) return explicit;
   if (startAt && endAt) {
     const diff = (Date.parse(endAt) - Date.parse(startAt)) / 60000;
