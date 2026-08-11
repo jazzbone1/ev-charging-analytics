@@ -107,17 +107,43 @@ async function fetchPage(
   }
 }
 
-// 한 페이지 최대 대기 시간, 그리고 전체 호출 루프의 시간 예산(ms)
-const PER_PAGE_TIMEOUT_MS = 20000;
-const OVERALL_BUDGET_MS = 25000;
+// 한 페이지 최대 대기 시간, 전체 호출 루프의 시간 예산, 페이지별 재시도 횟수
+const PER_PAGE_TIMEOUT_MS = 12000;
+const OVERALL_BUDGET_MS = 30000;
+const PAGE_RETRIES = 2;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 한 페이지를 재시도와 함께 가져온다(간헐적 지연/오류 대응). 실패 시 마지막 오류 throw */
+async function fetchPageWithRetry(
+  page: number,
+  filters: AnalyticsFilters,
+  deadline: number,
+): Promise<FetchResult> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= PAGE_RETRIES; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 1500) break;
+    const timeoutMs = Math.max(4000, Math.min(PER_PAGE_TIMEOUT_MS, remaining));
+    try {
+      return await fetchPage(page, filters, timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < PAGE_RETRIES && deadline - Date.now() > 2000) {
+        await sleep(400 * (attempt + 1)); // 짧은 백오프
+      }
+    }
+  }
+  throw lastErr ?? new Error('페이지 조회 실패');
+}
 
 /**
  * maxPages 만큼 순차적으로 페이지를 가져와 원본 레코드를 모은다.
  *
- * - 전체 시간 예산(OVERALL_BUDGET_MS)을 두어, 느린 API 때문에 요청이
- *   무한정 길어지지 않도록 한다. 예산을 넘으면 그때까지 받은 만큼만 반환.
+ * - 각 페이지는 재시도(PAGE_RETRIES)로 간헐적 지연에 대응한다.
+ * - 전체 시간 예산(OVERALL_BUDGET_MS)을 두어 무한정 대기하지 않는다.
  * - 첫 페이지부터 실패하면(수집 0건) throw → 라우트가 목업으로 폴백.
- *   그러나 일부라도 받았으면(부분 성공) 그 실데이터를 사용한다.
+ *   일부라도 받았으면(부분 성공) 그 실데이터를 사용한다.
  */
 export async function fetchChargingRecords(
   filters: AnalyticsFilters,
@@ -128,21 +154,17 @@ export async function fetchChargingRecords(
   const deadline = Date.now() + OVERALL_BUDGET_MS;
 
   for (let page = 1; page <= maxPages; page++) {
-    const remaining = deadline - Date.now();
-    // 시간 예산이 거의 소진됐고 이미 받은 데이터가 있으면 중단(부분 사용)
-    if (remaining <= 1000 && all.length > 0) break;
-    const timeoutMs = Math.max(4000, Math.min(PER_PAGE_TIMEOUT_MS, remaining));
+    if (deadline - Date.now() <= 1500 && all.length > 0) break;
 
     try {
-      const { rows, totalCount: tc } = await fetchPage(page, filters, timeoutMs);
+      const { rows, totalCount: tc } = await fetchPageWithRetry(page, filters, deadline);
       if (tc != null) totalCount = tc;
       all.push(...rows);
       if (rows.length < NUM_OF_ROWS) break; // 마지막 페이지
       if (totalCount != null && all.length >= totalCount) break;
     } catch (err) {
-      // 일부라도 받았으면 부분 성공으로 처리, 아니면 상위로 던져 목업 폴백
-      if (all.length > 0) break;
-      throw err;
+      if (all.length > 0) break; // 부분 성공
+      throw err; // 첫 페이지부터 실패 → 목업 폴백
     }
   }
 
