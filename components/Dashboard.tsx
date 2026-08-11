@@ -93,10 +93,7 @@ export function Dashboard() {
           </div>
           <div className="app-header__spacer" />
           {data ? (
-            <span className={`badge badge--${data.source === 'live' ? 'live' : 'mock'}`}>
-              <span className="badge__dot" />
-              {data.source === 'live' ? '실 데이터' : '목업 데이터'}
-            </span>
+            <SourceBadge source={data.source} lastIngestedAt={data.lastIngestedAt} />
           ) : null}
           <ThemeToggle />
         </div>
@@ -192,6 +189,41 @@ export function Dashboard() {
         합성데이터 조회서비스
       </footer>
     </>
+  );
+}
+
+function SourceBadge({
+  source,
+  lastIngestedAt,
+}: {
+  source: 'db' | 'live' | 'mock';
+  lastIngestedAt?: string | null;
+}) {
+  const map = {
+    db: { cls: 'badge--live', label: 'DB 데이터' },
+    live: { cls: 'badge--api', label: '실시간 API' },
+    mock: { cls: 'badge--mock', label: '목업 데이터' },
+  } as const;
+  const { cls, label } = map[source];
+
+  let ingestText = '';
+  if (source === 'db' && lastIngestedAt) {
+    const d = new Date(lastIngestedAt);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    ingestText = `적재 ${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  return (
+    <span
+      className={`badge ${cls}`}
+      title={ingestText ? `마지막 ${ingestText}` : undefined}
+    >
+      <span className="badge__dot" />
+      {label}
+      {ingestText ? (
+        <span style={{ fontWeight: 500, opacity: 0.75 }}>· {ingestText}</span>
+      ) : null}
+    </span>
   );
 }
 

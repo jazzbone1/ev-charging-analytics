@@ -140,6 +140,11 @@ a {
   background: rgba(237, 161, 0, 0.14);
   border-color: rgba(237, 161, 0, 0.3);
 }
+.badge--api {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
 .badge__dot {
   width: 7px;
   height: 7px;

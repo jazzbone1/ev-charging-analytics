@@ -93,8 +93,10 @@ export interface AnalyticsSummary {
 }
 
 export interface AnalyticsResponse {
-  /** 데이터 출처: 실제 공공데이터 API 응답 vs 목업 */
-  source: 'live' | 'mock';
+  /** 데이터 출처: DB 적재분 / 실시간 API / 목업 */
+  source: 'db' | 'live' | 'mock';
+  /** DB 마지막 적재 완료 시각(ISO). DB 소스일 때만 채워짐 */
+  lastIngestedAt?: string | null;
   /** 집계에 사용된 레코드 수 */
   sampled: number;
   /** API가 보고한 전체 레코드 수 (있는 경우) */

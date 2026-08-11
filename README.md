@@ -46,27 +46,39 @@ npm run dev
 | `EV_API_BASE_URL` | API 엔드포인트 | `…/B552584/elcarChrsChargRcngSyrdt/getList` |
 | `EV_API_MAX_PAGES` | 집계 시 가져올 최대 페이지 수(page당 100건) | `20` |
 | `USE_MOCK` | `1` 이면 키가 있어도 목업 사용 | (없음) |
+| `DATABASE_URL` | Postgres 연결 문자열(설정 시 **DB 모드**) | (없음) |
+| `PGSSL` | 외부 연결 SSL 필요 시 `require` | (없음) |
+| `INGEST_TOKEN` | `/api/ingest` 보호 토큰 | (없음 → 적재 비활성) |
 
-인증키는 **서버 라우트(`/api/analytics`)에서만** 사용되며 브라우저로 노출되지 않습니다.
+인증키는 **서버 라우트에서만** 사용되며 브라우저로 노출되지 않습니다.
+
+### 데이터 출처 우선순위
+
+대시보드(`/api/analytics`)는 다음 순서로 데이터를 결정합니다(헤더 배지로 표시):
+
+1. `USE_MOCK=1` → **목업**
+2. `DATABASE_URL` 있고 적재된 데이터 존재 → **DB**(SQL 집계, 전체·빠름·무폴백)
+3. 인증키 있음 → **실시간 API**(표본, 10분 캐시)
+4. 그 외 → **목업**
 
 ---
 
 ## 아키텍처
 
 ```
-브라우저 (Dashboard, 차트)  ──fetch──▶  /api/analytics (서버 라우트)
-                                            │
-                                            ├─ ev-api.ts    공공데이터 API 페이지네이션 호출
-                                            ├─ normalize.ts 원본 응답 → ChargingRecord 정규화
-                                            ├─ mock.ts      키 없을 때 합성 데이터 생성
-                                            └─ aggregate.ts 집계 → 차트용 시리즈
+브라우저 (Dashboard, 차트) ──fetch──▶ /api/analytics
+                                          │  ├─ db-analytics.ts  ← DB 있으면 SQL 집계 (source:'db')
+                                          │  ├─ ev-api.ts        ← 아니면 실시간 API (source:'live', 캐시)
+                                          │  ├─ mock.ts          ← 그 외 목업 (source:'mock')
+                                          │  └─ aggregate.ts     집계 → 차트용 시리즈
+
+                            /api/ingest ──▶ ingest.ts → normalize → db.ts (Postgres upsert)
 ```
 
-- `app/api/analytics/route.ts` — 필터를 받아 실 데이터/목업을 판단하고 집계 결과(JSON) 반환.
-  실 데이터 호출이 실패하면 목업으로 폴백하고 사유를 `notes` 로 안내합니다.
-- `lib/` — 순수 로직(정규화·집계·목업·API 클라이언트·포맷·팔레트).
-- `components/` — 대시보드 UI와 Recharts 차트. 차트 색은 검증된 데이터 시각화
-  팔레트(색맹 안전, 라이트/다크 각각 검증)를 사용합니다.
+- `app/api/analytics/route.ts` — DB → 실시간 API → 목업 순으로 데이터 출처를 결정.
+- `app/api/ingest/route.ts` — 토큰 보호 적재 트리거(이어받기 지원).
+- `lib/` — 순수 로직(정규화·집계·목업·API 클라이언트·DB·SQL 집계·포맷·팔레트).
+- `components/` — 대시보드 UI와 Recharts 차트. 색은 검증된 시각화 팔레트(색맹 안전).
 
 ---
 
@@ -110,6 +122,45 @@ npm run dev
 
 > `start` 스크립트가 Railway가 주입하는 `$PORT` 로 바인딩
 > (`next start -H 0.0.0.0 -p $PORT`)하도록 되어 있어 별도 설정 없이 헬스체크를 통과합니다.
+
+---
+
+## 전체 데이터 적재 (DB 모드)
+
+실시간 API는 느리고 표본만 봅니다. **Postgres에 전체를 미리 적재**하면 대시보드가
+DB만 조회하여 **빠르고, 전체 데이터이며, 폴백이 없습니다**. API는 적재할 때만 호출합니다.
+
+```
+[적재]  /api/ingest → 공공데이터 전체 페이지 순회 → Postgres upsert(중복 무시)
+[조회]  /api/analytics → Postgres SQL 집계 (source: 'db')
+```
+
+**Railway 설정**
+
+1. 프로젝트에서 **New → Database → Add PostgreSQL** (Railway가 `DATABASE_URL` 자동 주입)
+2. 웹 서비스 **Variables** 에 다음 추가:
+   - `INGEST_TOKEN` = 임의의 긴 문자열(적재 API 보호용)
+   - `EV_API_SERVICE_KEY` = data.go.kr 인증키
+   - (Postgres가 같은 프로젝트라면 `DATABASE_URL` 은 보통 자동 연결됨)
+3. **적재 실행** — 브라우저나 터미널에서:
+   ```
+   https://<앱주소>/api/ingest?token=<INGEST_TOKEN>
+   ```
+   - 응답에 `done:true` 면 완료. `done:false` 면 `nextPage` 로 이어서 호출:
+     ```
+     https://<앱주소>/api/ingest?token=<INGEST_TOKEN>&startPage=<nextPage>
+     ```
+   - `maxPages`, `timeBudgetMs`, `pageDelayMs` 로 한 번에 처리할 양을 조절할 수 있습니다.
+4. 적재 후 대시보드를 새로고침하면 배지가 **`DB 데이터`** 로 바뀝니다.
+
+**자동 갱신(선택)** — Railway **Cron** 서비스나 외부 스케줄러로 매일 아래를 호출:
+```
+curl -s "https://<앱주소>/api/ingest?token=<INGEST_TOKEN>"
+```
+중복은 `dedupe_key` 로 무시되므로 매일 실행해도 안전합니다(멱등).
+
+> 스키마(`charging_records`, `ingest_runs`)는 최초 호출 시 자동 생성됩니다.
+> 데이터가 아주 많으면 첫 적재만 `startPage` 로 여러 번 나눠 실행하세요.
 
 ---
 

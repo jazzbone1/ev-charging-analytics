@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 
 import { aggregate } from '@/lib/aggregate';
 import { getCached, setCached } from '@/lib/cache';
-import { config, shouldUseMock } from '@/lib/config';
+import { config } from '@/lib/config';
+import { analyticsFromDb, dbHasData } from '@/lib/db-analytics';
+import { hasDb } from '@/lib/db';
 import { fetchChargingRecords } from '@/lib/ev-api';
 import { generateMockRaw } from '@/lib/mock';
 import { normalizeRecords } from '@/lib/normalize';
@@ -46,19 +48,41 @@ export async function GET(request: Request) {
   const filters = parseFilters(searchParams);
   const notes: string[] = [];
 
-  // 1) 목업 모드
-  if (shouldUseMock()) {
-    notes.push(
-      config.serviceKey
-        ? 'USE_MOCK 설정이 켜져 있어 목업(가짜) 데이터를 표시합니다.'
-        : '인증키(EV_API_SERVICE_KEY)가 설정되지 않아 목업(가짜) 데이터를 표시합니다.',
-    );
+  const mock = () => {
     const rows = generateMockRaw(filters);
     const records = normalizeRecords(rows);
     return NextResponse.json(aggregate(records, 'mock', rows.length, notes));
+  };
+
+  // 1) 강제 목업 (USE_MOCK=1)
+  if (config.forceMock) {
+    notes.push('USE_MOCK 설정이 켜져 있어 목업(가짜) 데이터를 표시합니다.');
+    return mock();
   }
 
-  // 2) 캐시된 실데이터가 있으면 즉시 반환(느린 API 재호출 방지)
+  // 2) DB 우선: 적재된 데이터가 있으면 SQL 집계로 응답(무폴백·전체·빠름).
+  //    DB 읽기에는 인증키가 필요 없다(키는 적재 시에만 사용).
+  if (hasDb()) {
+    try {
+      if (await dbHasData()) {
+        return NextResponse.json(await analyticsFromDb(filters, notes));
+      }
+      notes.push(
+        'DB가 비어 있습니다. /api/ingest 로 적재하면 전체 데이터를 표시합니다.',
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      notes.push(`DB 조회 실패: ${message}`);
+    }
+  }
+
+  // 3) 인증키가 없으면 실시간 API 호출 불가 → 목업
+  if (!config.serviceKey) {
+    notes.push('인증키(EV_API_SERVICE_KEY)가 설정되지 않아 목업(가짜) 데이터를 표시합니다.');
+    return mock();
+  }
+
+  // 4) 캐시된 실데이터가 있으면 즉시 반환(느린 API 재호출 방지)
   const key = cacheKey(filters);
   const cached = getCached<AnalyticsResponse>(key, CACHE_TTL_MS);
   if (cached) {
@@ -68,7 +92,7 @@ export async function GET(request: Request) {
     });
   }
 
-  // 3) 실제 공공데이터 API
+  // 5) 실시간 공공데이터 API (DB 미구성/미적재 시)
   try {
     const { rows, totalCount } = await fetchChargingRecords(filters);
     if (rows.length === 0) {

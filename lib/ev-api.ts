@@ -114,6 +114,28 @@ const PAGE_RETRIES = 2;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 적재(ingest)용 원본 페이지 조회. 재시도 포함, 한 페이지 결과를 그대로 반환.
+ * (분석 조회의 30초 예산과 무관하게 대량 적재에서 사용)
+ */
+export async function fetchRawPage(
+  page: number,
+  filters: AnalyticsFilters,
+  timeoutMs = 15000,
+  retries = 2,
+): Promise<FetchResult> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchPage(page, filters, timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) await sleep(500 * (attempt + 1));
+    }
+  }
+  throw lastErr ?? new Error('페이지 조회 실패');
+}
+
 /** 한 페이지를 재시도와 함께 가져온다(간헐적 지연/오류 대응). 실패 시 마지막 오류 throw */
 async function fetchPageWithRetry(
   page: number,
